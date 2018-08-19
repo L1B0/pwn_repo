@@ -1,0 +1,3 @@
+break fsb
+break *0x080485D5
+
